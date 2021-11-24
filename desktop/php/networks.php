@@ -119,6 +119,12 @@ $eqLogics = eqLogic::byType($plugin->getId());
 							</div>
 						</div>
 						<div class="form-group">
+							<label class="col-sm-3 control-label">{{Interface Reseau (requis pour ping MAC)}}</label>
+							<div class="col-sm-3">
+								<input type="text" class="eqLogicAttr form-control" data-l1key="configuration" data-l2key="interfaceName"/>
+							</div>
+						</div>
+						<div class="form-group">
 							<label class="col-sm-3 control-label">{{Méthode de ping}}</label>
 							<div class="col-sm-3">
 								<select class="eqLogicAttr form-control" data-l1key="configuration" data-l2key="pingMode">

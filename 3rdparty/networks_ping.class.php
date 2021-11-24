@@ -4,6 +4,8 @@ class networks_Ping {
 	private $ttl;
 	private $port = 80;
 	private $data = 'Ping';
+	private $ifName = 'ens0';
+    private $mac = '00:00:00:00:00:00:00:00';
 
 	public function __construct($host, $ttl = 255) {
 		if (!isset($host)) {
@@ -24,9 +26,17 @@ class networks_Ping {
 	public function setHost($host) {
 		$this->host = $host;
 	}
+  
+   public function setMac($mac) {
+		$this->mac = $mac;
+	}
 
 	public function getHost() {
 		return $this->host;
+	}
+	
+	public function setIfName($ifName) {
+		$this->ifName = $ifName;
 	}
 
 	public function setPort($port) {
@@ -42,7 +52,7 @@ class networks_Ping {
 			case 'ip':
 				return $this->pingExec('ip');
 			case 'arp':
-				return $this->pingExec('arp');
+				return $this->pingMac();
 			case 'port':
 				return $this->pingPort();
 		}
@@ -53,11 +63,7 @@ class networks_Ping {
 		$latency = false;
 		$ttl = escapeshellcmd($this->ttl);
 		$host = escapeshellcmd($this->host);
-		if ($_mode == 'arp') {
-			$exec_string = 'sudo arping -c 10 -C 1 -w 500000 ' . $host . ' 2> /dev/null';
-		} else {
-			$exec_string = 'sudo ping -n -c 1 -t ' . $ttl . ' ' . $host . ' 2> /dev/null';
-		}
+		$exec_string = 'sudo ping -n -c 1 -t ' . $ttl . ' ' . $host . ' 2> /dev/null';
 		exec($exec_string, $output, $return);
 		$output = array_values(array_filter($output));
 		if (!empty($output[1])) {
@@ -70,7 +76,18 @@ class networks_Ping {
 		}
 		return $latency;
 	}
-
+	
+	private function pingMac() {
+		$latency = false;
+		$exec_string = 'sudo /usr/sbin/arp-scan -I ' . $this->ifName . ' -l -g --retry=5 -T ' . $this->mac . ' -t 800 | grep -i ' . $this->mac . ' | wc -l 2> /dev/null';
+		exec($exec_string, $output, $return);
+      
+		if (!empty($output[0])) {
+			$latency = $output[0];	
+		}
+        return $latency;
+	}
+	
 	private function pingPort() {
 		$start = microtime(true);
 		$fp = @fsockopen($this->host, $this->port, $errno, $errstr, $this->ttl);

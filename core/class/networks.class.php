@@ -32,8 +32,8 @@ class networks extends eqLogic {
 		$return['log'] = 'networks_update';
 		$return['progress_file'] = '/tmp/dependancy_networks_in_progress';
 		$return['state'] = 'ok';
-		if (exec('which etherwake | wc -l') == 0 || exec('which wakeonlan | wc -l') == 0) {
-			if (exec(" dpkg --get-selections | grep -v deinstall | grep -E 'wakeonlan|etherwake' | wc -l") != 2) {
+		if (exec('which etherwake | wc -l') == 0 || exec('which wakeonlan | wc -l') == 0 || exec('which arp-scan | wc -l') == 0 || exec('which fping | wc -l') == 0) {
+			if (exec(" dpkg --get-selections | grep -v deinstall | grep -E 'wakeonlan|etherwake|arp-scan|fping' | wc -l") != 4) {
 				$return['state'] = 'nok';
 			} 
 		} 
@@ -73,6 +73,16 @@ class networks extends eqLogic {
 		if ($this->getConfiguration('autorefresh') == '') {
 			$this->setConfiguration('autorefresh', '* * * * *');
 		}
+        if ($this->getConfiguration('interfaceName') == '') {
+            //$exec_string = 'ip link | awk -F: \'$0 !~ "lo|vir|wl|tun|^[^0-9]"{print $2;getline}\'';
+			$exec_string = 'ls /sys/class/net | grep -E "ens|eth"';
+        
+            exec($exec_string, $output, $return);
+            if (!empty($output[0])) {
+                $this->setConfiguration('interfaceName', $output[0]);
+            }
+			
+		}
 	}
 
 	public function postSave() {
@@ -104,20 +114,25 @@ class networks extends eqLogic {
 		$ping->save();
 
 		$latency = $this->getCmd(null, 'latency');
-		if (!is_object($latency)) {
-			$latency = new networksCmd();
-			$latency->setLogicalId('latency');
-			$latency->setIsVisible(1);
-			$latency->setName(__('Latence', __FILE__));
-			$latency->setOrder(2);
-			$latency->setTemplate('dashboard', 'line');
-		}
-		$latency->setType('info');
-		$latency->setSubType('numeric');
-		$latency->setEqLogic_id($this->getId());
-		$latency->setUnite('ms');
-		$latency->save();
-
+		if ($this->getConfiguration('pingMode') == 'arp') {
+			if (is_object($latency)) {
+				$latency->remove();
+			}
+		} else {
+			if (!is_object($latency)) {
+				$latency = new networksCmd();
+				$latency->setLogicalId('latency');
+				$latency->setIsVisible(1);
+				$latency->setName(__('Latence', __FILE__));
+				$latency->setOrder(2);
+				$latency->setTemplate('dashboard', 'line');
+			}
+			$latency->setType('info');
+			$latency->setSubType('numeric');
+			$latency->setEqLogic_id($this->getId());
+			$latency->setUnite('ms');
+			$latency->save();
+        }
 		$wol = $this->getCmd(null, 'wol');
 		if ($this->getConfiguration('mac') == '' || $this->getConfiguration('broadcastIP') == '') {
 			if (is_object($wol)) {
@@ -141,6 +156,9 @@ class networks extends eqLogic {
 		if ($this->getConfiguration('ip') == '') {
 			throw new Exception(__('L\'adresse IP ne peut être vide', __FILE__));
 		}
+		if ($this->getConfiguration('pingMode') == 'arp' && ($this->getConfiguration('interfaceName') == '' || $this->getConfiguration('mac') == '')) {
+			throw new Exception(__('L\'interface reseau et la MAC ne peuvent être vides pour le ping ARP', __FILE__));
+		}
 	}
 
 	public function ping() {
@@ -149,16 +167,38 @@ class networks extends eqLogic {
 		}
 		$changed = false;
 		$ping = new networks_Ping($this->getConfiguration('ip'), $this->getConfiguration('ttl', 255));
-		if ($this->getConfiguration('pingMode', 'ip') == 'port') {
-			$ping->setPort($this->getConfiguration('port', 80));
-		}
-		$latency_time = $ping->ping($this->getConfiguration('pingMode', 'ip'));
-		if ($latency_time === false) {
+		// delete remove du ping
+      
+		if ($this->getConfiguration('pingMode', 'ip') == 'arp') {
+			$ping->setIfName($this->getConfiguration('interfaceName'));
+            $ping->setMac($this->getConfiguration('mac'));
+			$latency_time = $ping->ping($this->getConfiguration('pingMode'));
+			if ($latency_time != false) {
+				$changed = $this->checkAndUpdateCmd('ping', 1) || $changed;
+			} else {
+				$changed = $this->checkAndUpdateCmd('ping', 0) || $changed;
+			}
+			
+		} else {
+			if ($this->getConfiguration('pingMode', 'ip') == 'port') {
+				$ping->setPort($this->getConfiguration('port', 80));
+			}
 			$latency_time = $ping->ping($this->getConfiguration('pingMode', 'ip'));
-		}
-		if ($latency_time === false) {
-			usleep(100);
-			$latency_time = $ping->ping($this->getConfiguration('pingMode', 'ip'));
+			if ($latency_time === false) {
+				$latency_time = $ping->ping($this->getConfiguration('pingMode', 'ip'));
+			}
+			if ($latency_time === false) {
+				usleep(100);
+				$latency_time = $ping->ping($this->getConfiguration('pingMode', 'ip'));
+			}
+			
+			if ($latency_time !== false) {
+				$changed = $this->checkAndUpdateCmd('ping', 1) || $changed;
+				$changed = $this->checkAndUpdateCmd('latency', $latency_time) || $changed;
+			} else {
+				$changed = $this->checkAndUpdateCmd('ping', 0) || $changed;
+				$changed = $this->checkAndUpdateCmd('latency', -1) || $changed;
+			}
 		}
 		if ($this->getConfiguration('notifyifko') == 1) {
 			if ($latency_time === false) {
@@ -169,13 +209,7 @@ class networks extends eqLogic {
 				}
 			}
 		}
-		if ($latency_time !== false) {
-			$changed = $this->checkAndUpdateCmd('ping', 1) || $changed;
-			$changed = $this->checkAndUpdateCmd('latency', $latency_time) || $changed;
-		} else {
-			$changed = $this->checkAndUpdateCmd('ping', 0) || $changed;
-			$changed = $this->checkAndUpdateCmd('latency', -1) || $changed;
-		}
+		
 		if ($changed) {
 			$this->refreshWidget();
 		}
